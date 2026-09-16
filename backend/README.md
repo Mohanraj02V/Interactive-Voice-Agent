@@ -17,7 +17,7 @@ cp .env.example .env
 # Edit .env with your settings
 
 # Run
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+py -m uvicorn app.main:app --reload --reload-dir app --port 8000
 ```
 
 ## API Endpoints

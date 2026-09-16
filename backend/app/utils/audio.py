@@ -4,7 +4,7 @@ Audio file validation and handling utilities.
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from fastapi import UploadFile
 
