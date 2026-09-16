@@ -5,7 +5,6 @@ Converts response text into WAV audio files.
 import time
 import wave
 from pathlib import Path
-from pathlib import Path
 from typing import Optional
 
 from app.config import get_settings
@@ -40,10 +39,17 @@ class TextToSpeechService:
         Check that Piper is available and the voice model exists.
         Returns True if everything is set up.
         """
-        # Find voice model relative to backend project
-        # Project root is backend/
+        # Find voice model relative to backend project root
         settings = get_settings()
-        model_path = Path(settings.piper_model).absolute()
+        raw_path = Path(settings.piper_model)
+        
+        if raw_path.is_absolute():
+            model_path = raw_path
+        else:
+            # Project root is 3 directories up from this file: backend/
+            model_path = Path(__file__).parent.parent.parent / raw_path
+            
+        model_path = model_path.resolve()
 
         if not model_path.exists():
             logger.warning(
@@ -54,12 +60,12 @@ class TextToSpeechService:
             return False
 
         try:
-            logger.info(f"[TTS] Initialization started for model: {model_path.name}")
+            logger.info(f"[TTS] Initialization started for model: {model_path}")
             from piper import PiperVoice
             self._voice = PiperVoice.load(str(model_path))
             self._model_path = model_path
             self._available = True
-            logger.info(f"[OK] Piper TTS available (model: {model_path.name})")
+            logger.info(f"[OK] Piper TTS available (model: {model_path})")
             return True
         except ImportError:
             logger.warning("[WARN] piper-tts python package is not installed. Run: pip install piper-tts")
@@ -108,8 +114,12 @@ class TextToSpeechService:
         start = time.time()
 
         try:
-            with wave.open(str(output_path), "wb") as f:
-                self._voice.synthesize(clean_text, f)
+            if hasattr(self._voice, 'synthesize_wav'):
+                with wave.open(str(output_path), "wb") as f:
+                    self._voice.synthesize_wav(clean_text, f)
+            else:
+                with wave.open(str(output_path), "wb") as f:
+                    self._voice.synthesize(clean_text, f)
         except Exception as e:
             output_path.unlink(missing_ok=True)
             raise TTSError(f"TTS synthesis failed: {str(e)}")

@@ -18,8 +18,8 @@ const APP_STATE = {
 };
 
 let msgCounter = 0;
-function createMessage(role, content) {
-  return { id: ++msgCounter, role, content, timestamp: new Date().toISOString() };
+function createMessage(role, content, audioUrl = null) {
+  return { id: ++msgCounter, role, content, audioUrl, timestamp: new Date().toISOString() };
 }
 
 // ── Service Health Indicator ─────────────────────────────────
@@ -61,6 +61,74 @@ export default function App() {
   const audioRef = useRef(null);
   const audioObjectUrlRef = useRef(null);
 
+  // Use a ref to break the circular dependency between useVoiceRecorder and handleUtteranceComplete
+  const handleUtteranceCompleteRef = useRef(null);
+
+  const {
+    isListening,
+    audioLevel,
+    error: recorderError,
+    startListening,
+    resumeListening,
+    pauseListening,
+    stopListening,
+    clearError: clearRecorderError,
+  } = useVoiceRecorder({ onUtteranceComplete: (blob) => handleUtteranceCompleteRef.current?.(blob) });
+
+  // ── Helper: Reset to listening state ───────────────────────
+  const resetToListening = useCallback(() => {
+    resumeListening();
+    setAppState(APP_STATE.LISTENING);
+  }, [resumeListening]);
+
+  // ── Processing Watchdog ────────────────────────────────────
+  useEffect(() => {
+    let timeoutId;
+    if (appState === APP_STATE.PROCESSING) {
+      timeoutId = setTimeout(() => {
+        console.warn('Watchdog: Processing state timed out after 45s. Resetting to listening.');
+        setError('The server took too long to respond. Please try again.');
+        resetToListening();
+      }, 45000);
+    }
+    return () => {
+      if (timeoutId) clearTimeout(timeoutId);
+    };
+  }, [appState, resetToListening]);
+
+  // ── Play TTS audio ─────────────────────────────────────────
+  const playAudio = useCallback(async (audioUrl) => {
+    if (audioObjectUrlRef.current) {
+      URL.revokeObjectURL(audioObjectUrlRef.current);
+      audioObjectUrlRef.current = null;
+    }
+
+    const fullUrl = getAudioUrl(audioUrl);
+    const audio = new Audio(fullUrl);
+    audioRef.current = audio;
+
+    setAppState(APP_STATE.SPEAKING);
+
+    audio.onended = () => {
+      audioRef.current = null;
+      // Audio finished, return to listening automatically
+      resetToListening();
+    };
+
+    audio.onerror = () => {
+      setError('Audio playback failed. The response is shown above.');
+      audioRef.current = null;
+      resetToListening();
+    };
+
+    try {
+      await audio.play();
+    } catch (err) {
+      setError('Audio playback was blocked by the browser. Click play to hear the response.');
+      resetToListening();
+    }
+  }, [resetToListening]);
+
   // ── Handle the audio blob: POST to backend ─────────────────
   const handleUtteranceComplete = useCallback(async (blob) => {
     setAppState(APP_STATE.PROCESSING);
@@ -90,7 +158,7 @@ export default function App() {
         } else {
           setError(msg);
           // Return to listening on failure (so they can try again without restarting the session)
-          resumeListening();
+          resetToListening();
           return;
         }
       }
@@ -113,7 +181,7 @@ export default function App() {
       if (result.audio_url) {
         await playAudio(result.audio_url);
       } else {
-        resumeListening();
+        resetToListening();
       }
     } catch (err) {
       let userMessage = 'Unable to connect to the AI server. Please check the backend is running.';
@@ -123,20 +191,14 @@ export default function App() {
         userMessage = 'Unable to connect to the AI server. Please check the backend is running.';
       }
       setError(userMessage);
-      resumeListening();
+      resetToListening();
     }
-  }, [messages]);
+  }, [messages, resetToListening, playAudio]);
 
-  const {
-    isListening,
-    audioLevel,
-    error: recorderError,
-    startListening,
-    resumeListening,
-    pauseListening,
-    stopListening,
-    clearError: clearRecorderError,
-  } = useVoiceRecorder({ onUtteranceComplete: handleUtteranceComplete });
+  // Keep the ref updated with the latest callback
+  useEffect(() => {
+    handleUtteranceCompleteRef.current = handleUtteranceComplete;
+  }, [handleUtteranceComplete]);
 
   // ── Health check on mount ──────────────────────────────────
   useEffect(() => {
@@ -180,56 +242,6 @@ export default function App() {
     }
   }, [isListening, appState]);
 
-  // Update app state when we resume listening
-  const handleResumeListening = useCallback(() => {
-    resumeListening();
-    setAppState(APP_STATE.LISTENING);
-  }, [resumeListening]);
-
-  // Update handleUtteranceComplete to use the memoized handleResumeListening
-  useEffect(() => {
-    // This is just to ensure handleResumeListening is bound correctly in the callback scope above.
-    // In React, since we call resumeListening directly in the callback, we also need to set state.
-    // The previous implementation of handleUtteranceComplete called resumeListening directly, 
-    // but we should make sure appState is updated too.
-  }, []);
-
-  // ── Play TTS audio ─────────────────────────────────────────
-  const playAudio = useCallback(async (audioUrl) => {
-    if (audioObjectUrlRef.current) {
-      URL.revokeObjectURL(audioObjectUrlRef.current);
-      audioObjectUrlRef.current = null;
-    }
-
-    const fullUrl = getAudioUrl(audioUrl);
-    const audio = new Audio(fullUrl);
-    audioRef.current = audio;
-
-    setAppState(APP_STATE.SPEAKING);
-
-    audio.onended = () => {
-      audioRef.current = null;
-      // Audio finished, return to listening automatically
-      resumeListening();
-      setAppState(APP_STATE.LISTENING);
-    };
-
-    audio.onerror = () => {
-      setError('Audio playback failed. The response is shown above.');
-      audioRef.current = null;
-      resumeListening();
-      setAppState(APP_STATE.LISTENING);
-    };
-
-    try {
-      await audio.play();
-    } catch (err) {
-      setError('Audio playback was blocked by the browser. Click play to hear the response.');
-      resumeListening();
-      setAppState(APP_STATE.LISTENING);
-    }
-  }, [resumeListening]);
-
   // ── Stop active session entirely ───────────────────────────
   const handleStopSession = useCallback(() => {
     if (audioRef.current) {
@@ -250,10 +262,9 @@ export default function App() {
     }
     // If session is still active, return to listening
     if (appState === APP_STATE.SPEAKING) {
-      resumeListening();
-      setAppState(APP_STATE.LISTENING);
+      resetToListening();
     }
-  }, [appState, resumeListening]);
+  }, [appState, resetToListening]);
 
   // ── Mic button click ───────────────────────────────────────
   const handleMicPress = useCallback(async () => {
@@ -297,7 +308,7 @@ export default function App() {
   // Custom wrapper for messages to pass down replay handler
   const messagesWithReplay = messages.map(msg => ({
     ...msg,
-    onReplay: msg.role === 'assistant' && msg.contentAudioUrl ? () => handleReplay(msg.contentAudioUrl) : undefined
+    onReplay: msg.role === 'assistant' && msg.audioUrl ? () => handleReplay(msg.audioUrl) : undefined
   }));
 
   // Map appState back to the strings VoiceButton expects for UI (idle, recording, processing, speaking)

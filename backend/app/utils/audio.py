@@ -4,7 +4,7 @@ Audio file validation and handling utilities.
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from fastapi import UploadFile
 
@@ -71,13 +71,10 @@ def detect_extension(content_type: Optional[str], filename: Optional[str]) -> st
     return "webm"
 
 
-def validate_audio_file(
-    file: UploadFile,
-    max_size_bytes: int,
-) -> Tuple[bytes, str]:
+def validate_audio_file(file: UploadFile) -> str:
     """
     Read and validate an uploaded audio file.
-    Returns (file_bytes, detected_extension).
+    Returns detected_extension.
     Raises AudioValidationError on failure.
     """
     content_type = file.content_type or ""
@@ -105,7 +102,7 @@ async def save_upload(file: UploadFile) -> Tuple[Path, str]:
     Raises AudioValidationError on failure.
     """
     settings = get_settings()
-    extension = validate_audio_file(file, settings.max_audio_size_bytes)
+    extension = validate_audio_file(file)
     temp_dir = get_temp_audio_dir()
     safe_name = generate_unique_filename(prefix="upload_", extension=extension)
     save_path = temp_dir / safe_name

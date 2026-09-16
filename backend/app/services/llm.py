@@ -123,13 +123,13 @@ class LLMService:
         )
         start = time.time()
 
+        # Safely join base URL and endpoint
+        base_url = settings.ollama_base_url.rstrip("/")
+        endpoint = settings.ollama_chat_endpoint.lstrip("/")
+        url = f"{base_url}/{endpoint}"
+
         try:
             with httpx.Client(timeout=settings.ollama_timeout) as client:
-                # Safely join base URL and endpoint
-                base_url = settings.ollama_base_url.rstrip("/")
-                endpoint = settings.ollama_chat_endpoint.lstrip("/")
-                url = f"{base_url}/{endpoint}"
-                
                 resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()

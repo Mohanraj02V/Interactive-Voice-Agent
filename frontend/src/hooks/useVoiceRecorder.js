@@ -34,6 +34,12 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
   const [audioLevel, setAudioLevel] = useState(0);
   const [error, setError] = useState(null);
 
+  // Sync callback to a ref so the recorder doesn't need to rebuild when messages change
+  const callbackRef = useRef(onUtteranceComplete);
+  useEffect(() => {
+    callbackRef.current = onUtteranceComplete;
+  }, [onUtteranceComplete]);
+
   // References to keep state across renders without triggering re-renders
   const mediaRecorderRef = useRef(null);
   const streamRef = useRef(null);
@@ -97,8 +103,8 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
         const blob = new Blob(chunksRef.current, {
           type: mimeTypeRef.current || 'audio/webm',
         });
-        if (onUtteranceComplete) {
-          onUtteranceComplete(blob);
+        if (callbackRef.current) {
+          callbackRef.current(blob);
         }
       }
       chunksRef.current = [];
@@ -109,7 +115,7 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
     };
 
     recorder.start(250);
-  }, [onUtteranceComplete]);
+  }, []);
 
   /** VAD loop to monitor audio levels and segment utterances */
   const vadLoop = useCallback(() => {

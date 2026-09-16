@@ -34,6 +34,10 @@ def setup_logging() -> logging.Logger:
     root_logger.handlers.clear()
     root_logger.addHandler(console_handler)
 
+    # Suppress noisy debug logs from third-party libraries
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     return root_logger
 
 
