@@ -102,13 +102,25 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
     const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
     analyserRef.current.getByteFrequencyData(dataArray);
     
-    // Calculate RMS (volume level)
-    let sumSquares = 0;
+    // Calculate RMS and speech ratio
+    let totalEnergy = 0;
+    let speechEnergy = 0;
+    
+    const sampleRate = audioContextRef.current?.sampleRate || 44100;
+    const binWidth = (sampleRate / 2) / analyserRef.current.frequencyBinCount;
+    const speechStartBin = Math.floor(300 / binWidth);
+    const speechEndBin = Math.ceil(3400 / binWidth);
+
     for (let i = 0; i < dataArray.length; i++) {
-      const norm = dataArray[i] / 255.0; // Normalize to 0-1
-      sumSquares += norm * norm;
+      const energy = (dataArray[i] / 255.0) ** 2;
+      totalEnergy += energy;
+      if (i >= speechStartBin && i <= speechEndBin) {
+        speechEnergy += energy;
+      }
     }
-    const rms = Math.sqrt(sumSquares / dataArray.length);
+    
+    const rms = Math.sqrt(totalEnergy / dataArray.length);
+    const speechRatio = totalEnergy > 0 ? speechEnergy / totalEnergy : 0;
     
     // Smooth visual level for UI
     setAudioLevel(prev => prev * 0.8 + rms * 0.2);
@@ -127,20 +139,23 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
       return;
     }
 
-    // Adapt noise floor slowly if not speaking
-    if (!isSpeechActiveRef.current) {
-      noiseFloorRef.current = noiseFloorRef.current * 0.95 + rms * 0.05;
-    }
-
     const threshold = Math.max(noiseFloorRef.current * VAD_NOISE_MULTIPLIER, 0.015);
     const isLoud = rms > threshold;
 
-    if (VAD_DEBUG && now - lastDebugLogRef.current > 250) {
-      lastDebugLogRef.current = now;
-      console.log(`[VAD DEBUG] rms: ${rms.toFixed(4)}, floor: ${noiseFloorRef.current.toFixed(4)}, thr: ${threshold.toFixed(4)}, loud: ${isLoud}, active: ${isSpeechActiveRef.current}`);
+    // Adapt noise floor slowly if not speaking AND not loud
+    // This freezes the noise floor against continuous non-speech noise
+    if (!isSpeechActiveRef.current && !isLoud) {
+      noiseFloorRef.current = noiseFloorRef.current * 0.95 + rms * 0.05;
     }
 
-    if (isLoud) {
+    const isSpeech = isLoud && speechRatio > 0.4;
+
+    if (VAD_DEBUG && now - lastDebugLogRef.current > 250) {
+      lastDebugLogRef.current = now;
+      console.log(`[VAD DEBUG] rms: ${rms.toFixed(4)}, floor: ${noiseFloorRef.current.toFixed(4)}, ratio: ${speechRatio.toFixed(2)}, isSpeech: ${isSpeech}`);
+    }
+
+    if (isSpeech) {
       consecutiveSpeechFramesRef.current++;
       if (consecutiveSpeechFramesRef.current >= 2) {
         lastSpeechAtRef.current = now;

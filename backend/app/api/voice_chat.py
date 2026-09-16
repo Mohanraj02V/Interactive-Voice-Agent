@@ -20,3 +20,18 @@ async def voice_chat(
     """
     service = get_voice_chat_service()
     return await service.process(audio, conversation)
+
+@router.post("/voice-chat/stream")
+async def voice_chat_stream(
+    audio: UploadFile = File(..., description="Audio file from the browser"),
+    conversation: str = Form(default="[]", description="JSON conversation history"),
+):
+    """
+    Process a voice input and stream the response back in chunked audio.
+    """
+    from fastapi.responses import StreamingResponse
+    service = get_voice_chat_service()
+    return StreamingResponse(
+        service.process_stream(audio, conversation),
+        media_type="application/x-ndjson"
+    )

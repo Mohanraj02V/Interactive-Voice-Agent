@@ -7,7 +7,7 @@ import ChatWindow from './components/ChatWindow';
 import VoiceButton from './components/VoiceButton';
 import VoiceStatus from './components/VoiceStatus';
 import { useVoiceRecorder } from './hooks/useVoiceRecorder';
-import { checkHealth, getAudioUrl, sendVoiceChat } from './services/api';
+import { checkHealth, getAudioUrl, sendVoiceChatStream, sendVoiceChat } from './services/api';
 
 // ── App state machine ────────────────────────────────────────
 const APP_STATE = {
@@ -60,6 +60,12 @@ export default function App() {
 
   const audioRef = useRef(null);
   const audioObjectUrlRef = useRef(null);
+  
+  // Streaming audio playback queue
+  const audioQueueRef = useRef([]);
+  const isPlayingRef = useRef(false);
+  const isStreamCompleteRef = useRef(true);
+  const assistantMessageIdRef = useRef(null);
 
   // Use a ref to break the circular dependency between useVoiceRecorder and handleUtteranceComplete
   const handleUtteranceCompleteRef = useRef(null);
@@ -96,104 +102,112 @@ export default function App() {
     };
   }, [appState, resetToListening]);
 
-  // ── Play TTS audio ─────────────────────────────────────────
-  const playAudio = useCallback(async (audioUrl) => {
-    if (audioObjectUrlRef.current) {
-      URL.revokeObjectURL(audioObjectUrlRef.current);
-      audioObjectUrlRef.current = null;
+  // ── Play next audio from queue ──────────────────────────────
+  const playNextAudio = useCallback(async () => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false;
+      if (isStreamCompleteRef.current) {
+        resetToListening();
+      }
+      return;
     }
 
-    const fullUrl = getAudioUrl(audioUrl);
-    const audio = new Audio(fullUrl);
-    audioRef.current = audio;
-
+    isPlayingRef.current = true;
     setAppState(APP_STATE.SPEAKING);
 
-    audio.onended = () => {
+    const nextAudio = audioQueueRef.current.shift();
+    audioRef.current = nextAudio;
+
+    nextAudio.onended = () => {
       audioRef.current = null;
-      // Audio finished, return to listening automatically
-      resetToListening();
+      playNextAudio();
     };
 
-    audio.onerror = () => {
-      setError('Audio playback failed. The response is shown above.');
+    nextAudio.onerror = () => {
+      setError('Audio playback failed mid-stream.');
       audioRef.current = null;
-      resetToListening();
+      playNextAudio();
     };
 
     try {
-      await audio.play();
+      await nextAudio.play();
     } catch (err) {
-      setError('Audio playback was blocked by the browser. Click play to hear the response.');
-      resetToListening();
+      setError('Audio playback was blocked by the browser.');
+      playNextAudio();
     }
   }, [resetToListening]);
 
-  // ── Handle the audio blob: POST to backend ─────────────────
+  // ── Handle the audio blob: POST to backend stream ──────────
   const handleUtteranceComplete = useCallback(async (blob) => {
     setAppState(APP_STATE.PROCESSING);
     setError(null);
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
+    isStreamCompleteRef.current = false;
+    assistantMessageIdRef.current = null;
 
     // Build conversation history (exclude audio_url, just role/content)
     const history = messages.map(({ role, content }) => ({ role, content }));
 
     try {
-      const result = await sendVoiceChat(blob, history);
+      await sendVoiceChatStream(blob, history, (data) => {
+        if (data.type === 'error') {
+           setError(data.message || 'Stream error');
+           isStreamCompleteRef.current = true;
+           audioQueueRef.current = [];
+           if (!isPlayingRef.current) resetToListening();
+        } else if (data.type === 'transcript') {
+           setMessages((prev) => [...prev, createMessage('user', data.text)]);
+        } else if (data.type === 'audio_chunk') {
+           // Preload audio
+           const fullUrl = getAudioUrl(data.audio_url);
+           const audio = new Audio(fullUrl);
+           audio.load();
+           audioQueueRef.current.push(audio);
 
-      if (!result.success) {
-        const code = result.error?.code;
-        const msg = result.error?.message || 'Something went wrong. Please try again.';
+           // Update text progressively
+           setMessages((prev) => {
+             const updated = [...prev];
+             const last = updated[updated.length - 1];
+             if (last && last.role === 'assistant' && last.id === assistantMessageIdRef.current) {
+               last.content = last.content ? last.content + ' ' + data.text : data.text;
+             } else {
+               const newMsg = createMessage('assistant', data.text);
+               assistantMessageIdRef.current = newMsg.id;
+               updated.push(newMsg);
+             }
+             return updated;
+           });
 
-        // Surface transcript even on LLM failure
-        if (result.transcript) {
-          setMessages((prev) => [
-            ...prev,
-            createMessage('user', result.transcript),
-          ]);
+           if (!isPlayingRef.current) {
+             playNextAudio();
+           }
+        } else if (data.type === 'done') {
+           isStreamCompleteRef.current = true;
+           setMessages((prev) => {
+             const updated = [...prev];
+             const last = updated[updated.length - 1];
+             // Ensure the final response is complete and accurate
+             if (last && last.role === 'assistant' && last.id === assistantMessageIdRef.current) {
+               last.content = data.full_response || last.content;
+             } else if (!assistantMessageIdRef.current) {
+               // If no chunks ever arrived, but it's done
+               updated.push(createMessage('assistant', data.full_response || ''));
+             }
+             return updated;
+           });
+           
+           if (!isPlayingRef.current) {
+             resetToListening();
+           }
         }
-
-        // TTS-only warning (response still succeeded)
-        if (code === 'TTS_UNAVAILABLE') {
-          // Handled below
-        } else {
-          setError(msg);
-          // Return to listening on failure (so they can try again without restarting the session)
-          resetToListening();
-          return;
-        }
-      }
-
-      // Add user transcript to chat
-      if (result.transcript) {
-        setMessages((prev) => [...prev, createMessage('user', result.transcript)]);
-      }
-
-      // Add AI response to chat
-      if (result.response) {
-        setMessages((prev) => [...prev, createMessage('assistant', result.response, result.audio_url)]);
-      }
-
-      if (result.error?.code === 'TTS_UNAVAILABLE') {
-        setError(result.error.message);
-      }
-
-      // Play audio if available, otherwise just resume listening
-      if (result.audio_url) {
-        await playAudio(result.audio_url);
-      } else {
-        resetToListening();
-      }
+      });
     } catch (err) {
       let userMessage = 'Unable to connect to the AI server. Please check the backend is running.';
-      if (err.response) {
-        userMessage = err.response.data?.detail || 'Server error. Please try again.';
-      } else if (err.message?.includes('Network Error')) {
-        userMessage = 'Unable to connect to the AI server. Please check the backend is running.';
-      }
       setError(userMessage);
       resetToListening();
     }
-  }, [messages, resetToListening, playAudio]);
+  }, [messages, resetToListening, playNextAudio]);
 
   // Keep the ref updated with the latest callback
   useEffect(() => {
@@ -249,6 +263,7 @@ export default function App() {
       audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
+    audioQueueRef.current = [];
     stopListening();
     setAppState(APP_STATE.IDLE);
   }, [stopListening]);
@@ -260,6 +275,9 @@ export default function App() {
       audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
+    
     // If session is still active, return to listening
     if (appState === APP_STATE.SPEAKING) {
       resetToListening();
@@ -285,6 +303,8 @@ export default function App() {
 
   // ── Replay audio ───────────────────────────────────────────
   const handleReplay = useCallback((audioUrl) => {
+    // Note: Replay is mostly disabled for streaming responses unless we modify backend to return a full compiled wav
+    // If a legacy message has audioUrl, play it.
     if (!audioUrl) return;
     
     // If we're listening, pause VAD so we don't transcribe the AI
@@ -292,8 +312,12 @@ export default function App() {
       pauseListening();
     }
     
-    playAudio(audioUrl);
-  }, [appState, pauseListening, playAudio]);
+    const fullUrl = getAudioUrl(audioUrl);
+    const audio = new Audio(fullUrl);
+    audioRef.current = audio;
+    audio.play();
+    audio.onended = () => { resetToListening(); };
+  }, [appState, pauseListening, resetToListening]);
 
   // ── Cleanup audio on unmount ───────────────────────────────
   useEffect(() => {

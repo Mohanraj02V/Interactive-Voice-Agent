@@ -2,8 +2,9 @@
 LLM service using Ollama's local API.
 Supports multi-turn conversation with configurable model.
 """
+import json
 import time
-from typing import List, Optional
+from typing import AsyncGenerator, List, Optional
 
 import httpx
 
@@ -111,6 +112,7 @@ class LLMService:
             "model": settings.ollama_model,
             "messages": ollama_messages,
             "stream": False,
+            "keep_alive": "30m",
             "options": {
                 "num_predict": settings.ollama_num_predict,
                 "temperature": 0.7,
@@ -182,6 +184,62 @@ class LLMService:
         logger.debug(f"Response: {response_text[:100]}{'...' if len(response_text) > 100 else ''}")
 
         return response_text
+
+    async def chat_stream(
+        self,
+        messages: List[ConversationMessage],
+        system_prompt: Optional[str] = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        Send messages to Ollama and yield the assistant response tokens over an async HTTP stream.
+        """
+        settings = get_settings()
+        prompt = system_prompt or settings.system_prompt
+
+        ollama_messages = [{"role": "system", "content": prompt}]
+        for msg in messages:
+            ollama_messages.append({"role": msg.role, "content": msg.content})
+
+        payload = {
+            "model": settings.ollama_model,
+            "messages": ollama_messages,
+            "stream": True,
+            "keep_alive": "30m",
+            "options": {
+                "num_predict": settings.ollama_num_predict,
+                "temperature": 0.7,
+            },
+        }
+
+        logger.info(f"[LLM] Stream Started: model={settings.ollama_model}")
+        start = time.time()
+
+        base_url = settings.ollama_base_url.rstrip("/")
+        endpoint = settings.ollama_chat_endpoint.lstrip("/")
+        url = f"{base_url}/{endpoint}"
+
+        try:
+            async with httpx.AsyncClient(timeout=settings.ollama_timeout) as client:
+                async with client.stream("POST", url, json=payload) as response:
+                    response.raise_for_status()
+                    
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            data = json.loads(line)
+                            if "message" in data and "content" in data["message"]:
+                                yield data["message"]["content"]
+                        except json.JSONDecodeError:
+                            logger.warning(f"[LLM] Failed to parse stream line: {line}")
+                            
+        except Exception as e:
+            logger.error(f"[LLM] Stream Error: {e}")
+            raise LLMError(f"AI stream error: {str(e)}")
+
+        elapsed = time.time() - start
+        logger.info(f"[LLM] Stream Completed: {elapsed:.2f}s")
+
 
 
 # Module-level singleton

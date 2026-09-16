@@ -127,7 +127,7 @@ class SpeechToTextService:
         try:
             segments, info = self._model.transcribe(
                 str(audio_path),
-                beam_size=5,
+                beam_size=1,
                 language="en",
                 vad_filter=True,  # Filter out silent sections
                 vad_parameters={"min_silence_duration_ms": 500},

@@ -46,6 +46,65 @@ export async function sendVoiceChat(audioBlob, conversation = []) {
 }
 
 /**
+ * Send audio and conversation history, expecting a streamed chunked response.
+ * @param {Blob} audioBlob - Recorded audio blob
+ * @param {Array} conversation - Array of {role, content} messages
+ * @param {Function} onChunk - Callback for each parsed JSON line
+ */
+export async function sendVoiceChatStream(audioBlob, conversation = [], onChunk) {
+  const formData = new FormData();
+  const mimeType = audioBlob.type || 'audio/webm';
+  const extension = mimeType.includes('ogg') ? 'ogg'
+    : mimeType.includes('wav') ? 'wav'
+    : mimeType.includes('mp4') ? 'mp4'
+    : 'webm';
+
+  formData.append('audio', audioBlob, `recording.${extension}`);
+  formData.append('conversation', JSON.stringify(conversation));
+
+  const response = await fetch(`${BASE_URL}/voice-chat/stream`, {
+    method: 'POST',
+    body: formData,
+    // Note: no Content-Type header so fetch can set the correct multipart boundary
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      
+      // Keep the last partial line in the buffer
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          try {
+            const data = JSON.parse(trimmed);
+            onChunk(data);
+          } catch (e) {
+            console.error('Failed to parse streaming JSON chunk:', trimmed, e);
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
  * Get the full URL for a generated audio file.
  * @param {string} filename - Audio filename from the API response
  * @returns {string} Full URL

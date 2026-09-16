@@ -209,6 +209,96 @@ class VoiceChatService:
             logger.warning(f"Could not parse conversation JSON: {e}")
             return []
 
+    async def process_stream(
+        self,
+        audio_file: UploadFile,
+        conversation_json: str,
+    ):
+        settings = get_settings()
+        saved_audio_path: Optional[Path] = None
+
+        self._run_cleanup()
+        conversation = self._parse_conversation(conversation_json)
+        
+        try:
+            # 1. Save uploaded audio
+            try:
+                saved_audio_path, extension = await save_upload(audio_file)
+            except AudioValidationError as e:
+                yield json.dumps({"type": "error", "code": "AUDIO_INVALID", "message": str(e)}) + "\n"
+                return
+
+            # 2. Speech to Text
+            stt = get_stt_service()
+            try:
+                transcript = stt.transcribe(saved_audio_path)
+            except SpeechToTextError as e:
+                yield json.dumps({"type": "error", "code": "TRANSCRIPTION_FAILED", "message": str(e)}) + "\n"
+                return
+            finally:
+                cleanup_file(saved_audio_path)
+                saved_audio_path = None
+
+            if not transcript or len(transcript.strip()) < MIN_TRANSCRIPT_CHARS:
+                yield json.dumps({"type": "error", "code": "EMPTY_TRANSCRIPT", "message": "I couldn't understand the audio. Please try speaking again."}) + "\n"
+                return
+
+            yield json.dumps({"type": "transcript", "text": transcript}) + "\n"
+
+            messages = self._build_messages(conversation, transcript, settings.max_conversation_messages)
+
+            # 3. LLM Streaming
+            llm = get_llm_service()
+            tts = get_tts_service()
+            
+            buffer = ""
+            full_response = ""
+            
+            async for token in llm.chat_stream(messages):
+                buffer += token
+                full_response += token
+                
+                if len(buffer.strip()) >= 10:
+                    if buffer.rstrip().endswith((".", "?", "!", "\n")) or len(buffer) > 120:
+                        sentence = buffer.strip()
+                        buffer = ""
+                        
+                        try:
+                            audio_path = tts.synthesize(sentence)
+                            audio_url = f"/api/audio/{audio_path.name}"
+                            yield json.dumps({"type": "audio_chunk", "text": sentence, "audio_url": audio_url}) + "\n"
+                        except TTSError as e:
+                            logger.error(f"TTS error chunk: {e}")
+                            yield json.dumps({"type": "error", "code": "TTS_ERROR", "message": "Voice synthesis error mid-stream."}) + "\n"
+                            return
+                            
+            if buffer.strip():
+                sentence = buffer.strip()
+                try:
+                    audio_path = tts.synthesize(sentence)
+                    audio_url = f"/api/audio/{audio_path.name}"
+                    yield json.dumps({"type": "audio_chunk", "text": sentence, "audio_url": audio_url}) + "\n"
+                except TTSError as e:
+                    logger.error(f"TTS error chunk: {e}")
+                    yield json.dumps({"type": "error", "code": "TTS_ERROR", "message": "Voice synthesis error mid-stream."}) + "\n"
+                    return
+
+            yield json.dumps({
+                "type": "done",
+                "transcript": transcript,
+                "full_response": full_response.strip()
+            }) + "\n"
+
+        except LLMUnavailableError as e:
+            yield json.dumps({"type": "error", "code": "LLM_UNAVAILABLE", "message": str(e)}) + "\n"
+        except LLMError as e:
+            yield json.dumps({"type": "error", "code": "LLM_ERROR", "message": str(e)}) + "\n"
+        except Exception as e:
+            logger.exception(f"Unexpected error in stream: {e}")
+            if saved_audio_path:
+                cleanup_file(saved_audio_path)
+            yield json.dumps({"type": "error", "code": "INTERNAL_ERROR", "message": "An unexpected error occurred."}) + "\n"
+
     def _build_messages(
         self,
         history: List[ConversationMessage],
