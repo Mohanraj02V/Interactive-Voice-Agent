@@ -5,7 +5,7 @@
 
 const STATUS_CONFIG = {
   idle: {
-    text: 'Click the microphone to speak',
+    text: 'Start Voice Chat',
     className: 'idle',
   },
   recording: {
@@ -13,11 +13,11 @@ const STATUS_CONFIG = {
     className: 'recording',
   },
   processing: {
-    text: 'Processing your question...',
+    text: 'Thinking...',
     className: 'processing',
   },
   speaking: {
-    text: 'AI is speaking...',
+    text: 'AI Speaking...',
     className: 'speaking',
   },
   error: {

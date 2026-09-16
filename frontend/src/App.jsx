@@ -1,10 +1,6 @@
 /**
  * App.jsx — Main application component.
- * Manages all state and orchestrates the voice chat flow.
- *
- * Flow:
- *   User clicks mic → record → stop → POST /api/voice-chat
- *   → show transcript → show AI response → play audio → idle
+ * Manages all state and orchestrates the continuous voice chat flow.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import ChatWindow from './components/ChatWindow';
@@ -14,10 +10,9 @@ import { useVoiceRecorder } from './hooks/useVoiceRecorder';
 import { checkHealth, getAudioUrl, sendVoiceChat } from './services/api';
 
 // ── App state machine ────────────────────────────────────────
-// idle | recording | processing | speaking | error
 const APP_STATE = {
   IDLE: 'idle',
-  RECORDING: 'recording',
+  LISTENING: 'listening',
   PROCESSING: 'processing',
   SPEAKING: 'speaking',
 };
@@ -61,57 +56,13 @@ export default function App() {
   const [appState, setAppState] = useState(APP_STATE.IDLE);
   const [messages, setMessages] = useState([]);
   const [error, setError] = useState(null);
-  const [health, setHealth] = useState({ ollama: null, whisper: null, tts: null });
+  const [health, setHealth] = useState({ ollama: null, whisper: null, tts: null, ollama_model_available: null });
 
   const audioRef = useRef(null);
   const audioObjectUrlRef = useRef(null);
 
-  const {
-    isRecording,
-    audioBlob,
-    audioLevel,
-    error: recorderError,
-    startRecording,
-    stopRecording,
-    clearError: clearRecorderError,
-    clearBlob,
-  } = useVoiceRecorder();
-
-  // ── Health check on mount ──────────────────────────────────
-  useEffect(() => {
-    async function fetchHealth() {
-      try {
-        const data = await checkHealth();
-        setHealth({ ollama: data.ollama, whisper: data.whisper, tts: data.tts });
-      } catch {
-        setHealth({ ollama: false, whisper: false, tts: false });
-      }
-    }
-    fetchHealth();
-    // Recheck every 30s
-    const interval = setInterval(fetchHealth, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // ── Sync recorder error → app error ───────────────────────
-  useEffect(() => {
-    if (recorderError) {
-      setError(recorderError);
-      clearRecorderError();
-      setAppState(APP_STATE.IDLE);
-    }
-  }, [recorderError, clearRecorderError]);
-
-  // ── Process audio blob when recording stops ────────────────
-  useEffect(() => {
-    if (!audioBlob) return;
-    handleAudioBlob(audioBlob);
-    clearBlob();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioBlob]);
-
   // ── Handle the audio blob: POST to backend ─────────────────
-  const handleAudioBlob = useCallback(async (blob) => {
+  const handleUtteranceComplete = useCallback(async (blob) => {
     setAppState(APP_STATE.PROCESSING);
     setError(null);
 
@@ -135,10 +86,11 @@ export default function App() {
 
         // TTS-only warning (response still succeeded)
         if (code === 'TTS_UNAVAILABLE') {
-          // This is handled below with audio_url = null
+          // Handled below
         } else {
           setError(msg);
-          setAppState(APP_STATE.IDLE);
+          // Return to listening on failure (so they can try again without restarting the session)
+          resumeListening();
           return;
         }
       }
@@ -150,19 +102,18 @@ export default function App() {
 
       // Add AI response to chat
       if (result.response) {
-        setMessages((prev) => [...prev, createMessage('assistant', result.response)]);
+        setMessages((prev) => [...prev, createMessage('assistant', result.response, result.audio_url)]);
       }
 
-      // Show TTS warning if present but non-fatal
       if (result.error?.code === 'TTS_UNAVAILABLE') {
         setError(result.error.message);
       }
 
-      // Play audio if available
+      // Play audio if available, otherwise just resume listening
       if (result.audio_url) {
         await playAudio(result.audio_url);
       } else {
-        setAppState(APP_STATE.IDLE);
+        resumeListening();
       }
     } catch (err) {
       let userMessage = 'Unable to connect to the AI server. Please check the backend is running.';
@@ -172,13 +123,79 @@ export default function App() {
         userMessage = 'Unable to connect to the AI server. Please check the backend is running.';
       }
       setError(userMessage);
-      setAppState(APP_STATE.IDLE);
+      resumeListening();
     }
   }, [messages]);
 
+  const {
+    isListening,
+    audioLevel,
+    error: recorderError,
+    startListening,
+    resumeListening,
+    pauseListening,
+    stopListening,
+    clearError: clearRecorderError,
+  } = useVoiceRecorder({ onUtteranceComplete: handleUtteranceComplete });
+
+  // ── Health check on mount ──────────────────────────────────
+  useEffect(() => {
+    async function fetchHealth() {
+      try {
+        const data = await checkHealth();
+        setHealth({ 
+          ollama: data.ollama, 
+          whisper: data.whisper, 
+          tts: data.tts,
+          ollama_model_available: data.ollama_model_available
+        });
+      } catch {
+        setHealth({ ollama: false, whisper: false, tts: false, ollama_model_available: false });
+      }
+    }
+    fetchHealth();
+    const interval = setInterval(fetchHealth, 30000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ── Sync recorder error → app error ───────────────────────
+  useEffect(() => {
+    if (recorderError) {
+      setError(recorderError);
+      clearRecorderError();
+      setAppState(APP_STATE.IDLE);
+    }
+  }, [recorderError, clearRecorderError]);
+
+  // ── Keep appState in sync with isListening from hook ───────
+  useEffect(() => {
+    // If hook says we're listening but app state is idle (just started)
+    if (isListening && appState === APP_STATE.IDLE) {
+      setAppState(APP_STATE.LISTENING);
+    } 
+    // If hook stopped listening and we were listening, it might be processing or actually stopped
+    else if (!isListening && appState === APP_STATE.LISTENING) {
+      // If we didn't transition to PROCESSING, it means it was stopped
+      // But we let handleUtteranceComplete handle PROCESSING transition.
+    }
+  }, [isListening, appState]);
+
+  // Update app state when we resume listening
+  const handleResumeListening = useCallback(() => {
+    resumeListening();
+    setAppState(APP_STATE.LISTENING);
+  }, [resumeListening]);
+
+  // Update handleUtteranceComplete to use the memoized handleResumeListening
+  useEffect(() => {
+    // This is just to ensure handleResumeListening is bound correctly in the callback scope above.
+    // In React, since we call resumeListening directly in the callback, we also need to set state.
+    // The previous implementation of handleUtteranceComplete called resumeListening directly, 
+    // but we should make sure appState is updated too.
+  }, []);
+
   // ── Play TTS audio ─────────────────────────────────────────
   const playAudio = useCallback(async (audioUrl) => {
-    // Revoke previous object URL if any
     if (audioObjectUrlRef.current) {
       URL.revokeObjectURL(audioObjectUrlRef.current);
       audioObjectUrlRef.current = null;
@@ -191,64 +208,81 @@ export default function App() {
     setAppState(APP_STATE.SPEAKING);
 
     audio.onended = () => {
-      setAppState(APP_STATE.IDLE);
       audioRef.current = null;
+      // Audio finished, return to listening automatically
+      resumeListening();
+      setAppState(APP_STATE.LISTENING);
     };
 
     audio.onerror = () => {
       setError('Audio playback failed. The response is shown above.');
-      setAppState(APP_STATE.IDLE);
       audioRef.current = null;
+      resumeListening();
+      setAppState(APP_STATE.LISTENING);
     };
 
     try {
       await audio.play();
     } catch (err) {
-      // Autoplay may be blocked
       setError('Audio playback was blocked by the browser. Click play to hear the response.');
-      setAppState(APP_STATE.IDLE);
+      resumeListening();
+      setAppState(APP_STATE.LISTENING);
     }
-  }, []);
+  }, [resumeListening]);
 
-  // ── Stop speaking ──────────────────────────────────────────
+  // ── Stop active session entirely ───────────────────────────
+  const handleStopSession = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    stopListening();
+    setAppState(APP_STATE.IDLE);
+  }, [stopListening]);
+
+  // ── Stop speaking (just the audio) ─────────────────────────
   const handleStopSpeaking = useCallback(() => {
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       audioRef.current = null;
     }
-    setAppState(APP_STATE.IDLE);
-  }, []);
+    // If session is still active, return to listening
+    if (appState === APP_STATE.SPEAKING) {
+      resumeListening();
+      setAppState(APP_STATE.LISTENING);
+    }
+  }, [appState, resumeListening]);
 
   // ── Mic button click ───────────────────────────────────────
   const handleMicPress = useCallback(async () => {
-    if (appState === APP_STATE.SPEAKING) return; // Use stop speaking button
-    if (appState === APP_STATE.PROCESSING) return; // Guard
-
-    if (appState === APP_STATE.RECORDING) {
-      stopRecording();
-      // appState → PROCESSING is set after blob arrives
-    } else {
-      // Idle → start recording
-      await startRecording();
-      // Only update to RECORDING if no error (error effect above resets to IDLE)
-      setAppState((prev) =>
-        prev === APP_STATE.IDLE ? APP_STATE.RECORDING : prev
-      );
+    if (appState === APP_STATE.IDLE) {
+      await startListening();
+      // State transition to LISTENING is handled by useEffect on isListening
     }
-  }, [appState, startRecording, stopRecording]);
-
-  // When recording stops and we get the blob, the useEffect above fires.
-  // But if startRecording fails, appState resets via recorder error useEffect.
+    // If not idle, mic button acts as an indicator, not a control.
+    // The user should use "Stop Voice Chat" to stop.
+  }, [appState, startListening]);
 
   // ── New chat ───────────────────────────────────────────────
   const handleNewChat = useCallback(() => {
-    if (appState === APP_STATE.RECORDING) stopRecording();
-    if (appState === APP_STATE.SPEAKING) handleStopSpeaking();
+    handleStopSession();
     setMessages([]);
     setError(null);
-    setAppState(APP_STATE.IDLE);
-  }, [appState, stopRecording, handleStopSpeaking]);
+  }, [handleStopSession]);
+
+  // ── Replay audio ───────────────────────────────────────────
+  const handleReplay = useCallback((audioUrl) => {
+    if (!audioUrl) return;
+    
+    // If we're listening, pause VAD so we don't transcribe the AI
+    if (appState === APP_STATE.LISTENING) {
+      pauseListening();
+    }
+    
+    playAudio(audioUrl);
+  }, [appState, pauseListening, playAudio]);
 
   // ── Cleanup audio on unmount ───────────────────────────────
   useEffect(() => {
@@ -259,6 +293,15 @@ export default function App() {
   }, []);
 
   const isProcessing = appState === APP_STATE.PROCESSING;
+  
+  // Custom wrapper for messages to pass down replay handler
+  const messagesWithReplay = messages.map(msg => ({
+    ...msg,
+    onReplay: msg.role === 'assistant' && msg.contentAudioUrl ? () => handleReplay(msg.contentAudioUrl) : undefined
+  }));
+
+  // Map appState back to the strings VoiceButton expects for UI (idle, recording, processing, speaking)
+  const uiState = appState === APP_STATE.LISTENING ? 'recording' : appState;
 
   return (
     <div className="app-container">
@@ -281,7 +324,7 @@ export default function App() {
       {/* ── Service Status Bar ── */}
       <nav className="service-status-bar" aria-label="Service status">
         <ServiceDot available={health.whisper} label="Speech" />
-        <ServiceDot available={health.ollama} label="AI" />
+        <ServiceDot available={health.ollama && health.ollama_model_available} label="AI" />
         <ServiceDot available={health.tts} label="Voice" />
       </nav>
 
@@ -289,28 +332,38 @@ export default function App() {
       <ErrorBanner message={error} onClose={() => setError(null)} />
 
       {/* ── Chat Window ── */}
-      <ChatWindow messages={messages} isProcessing={isProcessing} />
+      <ChatWindow messages={messagesWithReplay} isProcessing={isProcessing} />
 
       {/* ── Voice Controls ── */}
       <section className="voice-control-panel" aria-label="Voice controls">
         <VoiceButton
-          state={appState}
+          state={uiState}
           onPress={handleMicPress}
           audioLevel={audioLevel}
         />
 
-        <VoiceStatus status={appState} />
+        <VoiceStatus status={uiState} />
 
-        {/* Stop Speaking button */}
-        {appState === APP_STATE.SPEAKING && (
-          <button
-            id="stop-speaking-btn"
-            className="btn-stop"
-            onClick={handleStopSpeaking}
-            aria-label="Stop AI audio playback"
-          >
-            ⏹ Stop
-          </button>
+        {/* Stop Voice Session button */}
+        {appState !== APP_STATE.IDLE && (
+          <div className="stop-controls">
+            {appState === APP_STATE.SPEAKING && (
+               <button
+                 className="btn-stop btn-stop-speaking"
+                 onClick={handleStopSpeaking}
+                 aria-label="Stop AI audio playback"
+               >
+                 ⏹ Stop Speaking
+               </button>
+            )}
+            <button
+              className="btn-stop btn-stop-session"
+              onClick={handleStopSession}
+              aria-label="Stop Voice Chat Session"
+            >
+              ⏹ Stop Voice Chat
+            </button>
+          </div>
         )}
       </section>
     </div>

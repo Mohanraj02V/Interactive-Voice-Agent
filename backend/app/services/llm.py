@@ -31,34 +31,54 @@ class LLMService:
 
     def __init__(self):
         self._available = False
-        self._checked = False
+        self._model_available = False
 
     def check_availability(self) -> bool:
         """
-        Check if Ollama is running and reachable.
-        Returns True if available.
+        Check if Ollama is running, reachable, and the configured model is installed.
+        Returns True if Ollama service is reachable.
         """
         settings = get_settings()
         try:
             with httpx.Client(timeout=5.0) as client:
-                resp = client.get(f"{settings.ollama_base_url}/api/tags")
+                resp = client.get(f"{settings.ollama_base_url.rstrip('/')}/api/tags")
                 if resp.status_code == 200:
                     self._available = True
-                    logger.info(f"[OK] Ollama connected at {settings.ollama_base_url} "
-                                f"(model: {settings.ollama_model})")
+                    tags_data = resp.json()
+                    
+                    models = [m.get("name") for m in tags_data.get("models", [])]
+                    
+                    # Ensure exact match or tag inference
+                    expected_model = settings.ollama_model
+                    if expected_model in models or f"{expected_model}:latest" in models or expected_model.replace(':latest', '') in models:
+                        self._model_available = True
+                        logger.info(f"[OK] Ollama connected at {settings.ollama_base_url} (model: {settings.ollama_model})")
+                    else:
+                        self._model_available = False
+                        logger.warning(
+                            f"[WARN] Configured AI model '{settings.ollama_model}' is not installed.\n"
+                            f"Run: ollama pull {settings.ollama_model}\n"
+                            f"Available models: {', '.join(models) if models else 'None'}"
+                        )
                     return True
                 else:
                     self._available = False
-                    logger.warning(f"[WARN] Ollama returned status {resp.status_code}")
+                    self._model_available = False
+                    logger.warning(f"[WARN] Ollama returned status {resp.status_code} at {settings.ollama_base_url}")
                     return False
         except Exception as e:
             self._available = False
+            self._model_available = False
             logger.warning(f"[WARN] Ollama unavailable at {settings.ollama_base_url}: {e}")
             return False
 
     @property
     def is_available(self) -> bool:
         return self._available
+
+    @property
+    def is_model_available(self) -> bool:
+        return self._model_available
 
     def chat(
         self,
@@ -105,10 +125,12 @@ class LLMService:
 
         try:
             with httpx.Client(timeout=settings.ollama_timeout) as client:
-                resp = client.post(
-                    f"{settings.ollama_base_url}/api/chat",
-                    json=payload,
-                )
+                # Safely join base URL and endpoint
+                base_url = settings.ollama_base_url.rstrip("/")
+                endpoint = settings.ollama_chat_endpoint.lstrip("/")
+                url = f"{base_url}/{endpoint}"
+                
+                resp = client.post(url, json=payload)
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -124,11 +146,15 @@ class LLMService:
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
-                raise LLMError(
-                    f"Model '{settings.ollama_model}' not found in Ollama. "
-                    f"Run: ollama pull {settings.ollama_model}"
-                )
-            raise LLMError(f"AI service returned an error: {e.response.status_code}")
+                # Differentiate between model missing and endpoint missing
+                if not self._model_available:
+                    raise LLMError(
+                        f"Configured AI model '{settings.ollama_model}' is not installed. "
+                        f"Run: ollama pull {settings.ollama_model}"
+                    )
+                else:
+                    raise LLMError(f"AI chat endpoint not found. Check OLLAMA_CHAT_ENDPOINT.")
+            raise LLMError(f"Could not generate an AI response. (Status: {e.response.status_code})")
         except Exception as e:
             raise LLMError(f"AI service error: {str(e)}")
 

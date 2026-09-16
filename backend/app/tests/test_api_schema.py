@@ -79,6 +79,7 @@ class TestHealthStatus:
         status = HealthStatus(
             status="ok",
             ollama=True,
+            ollama_model_available=True,
             whisper=True,
             tts=True,
             ollama_model="qwen2.5:3b",
@@ -91,6 +92,7 @@ class TestHealthStatus:
         status = HealthStatus(
             status="ok",
             ollama=False,
+            ollama_model_available=False,
             whisper=False,
             tts=False,
         )

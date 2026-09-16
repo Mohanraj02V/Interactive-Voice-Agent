@@ -31,6 +31,7 @@ class HealthStatus(BaseModel):
     """Response from /api/health endpoint."""
     status: str
     ollama: bool
+    ollama_model_available: bool
     whisper: bool
     tts: bool
     ollama_model: Optional[str] = None

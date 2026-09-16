@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     # Ollama LLM
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
+    ollama_chat_endpoint: str = Field(default="/api/chat", alias="OLLAMA_CHAT_ENDPOINT")
     ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
     ollama_num_predict: int = Field(default=300, alias="OLLAMA_NUM_PREDICT")
     ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")

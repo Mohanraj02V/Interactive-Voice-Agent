@@ -15,7 +15,7 @@ function formatTime(isoString) {
 }
 
 export default function ChatMessage({ message }) {
-  const { role, content, timestamp } = message;
+  const { role, content, timestamp, onReplay } = message;
   const isUser = role === 'user';
 
   return (
@@ -28,6 +28,16 @@ export default function ChatMessage({ message }) {
       </div>
       <div className="chat-message-bubble">
         {content}
+        {onReplay && (
+          <button 
+            className="btn-replay" 
+            onClick={onReplay} 
+            aria-label="Replay audio"
+            title="Replay audio"
+          >
+            🔊 Play
+          </button>
+        )}
       </div>
       {timestamp && (
         <time className="chat-message-time" dateTime={timestamp}>

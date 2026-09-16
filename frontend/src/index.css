@@ -540,6 +540,42 @@ body::before {
   outline-offset: 2px;
 }
 
+.stop-controls {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.btn-stop-speaking {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #22c55e;
+}
+
+.btn-stop-speaking:hover {
+  background: rgba(34, 197, 94, 0.22);
+  border-color: rgba(34, 197, 94, 0.55);
+}
+
+.btn-replay {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  cursor: pointer;
+  margin-top: 8px;
+  margin-left: 8px;
+  transition: all var(--transition-fast);
+}
+
+.btn-replay:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
 /* --- Error Banner --- */
 .error-banner {
   margin: 0 0 var(--space-sm);

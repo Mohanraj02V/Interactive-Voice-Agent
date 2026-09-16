@@ -48,7 +48,9 @@ async def lifespan(app: FastAPI):
     llm = get_llm_service()
     llm_ok = llm.check_availability()
     if not llm_ok:
-        logger.warning("[WARN] Ollama unavailable - LLM will not work")
+        logger.warning("[WARN] Ollama service is unreachable - LLM will not work")
+    elif not llm.is_model_available:
+        logger.warning(f"[WARN] Ollama model '{settings.ollama_model}' is missing - LLM will not work")
 
     # Initialize Piper TTS
     logger.info("Checking Piper TTS...")

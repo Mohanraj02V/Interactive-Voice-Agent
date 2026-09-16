@@ -29,6 +29,7 @@ async def health_check() -> HealthStatus:
     return HealthStatus(
         status="ok",
         ollama=ollama_ok,
+        ollama_model_available=llm.is_model_available,
         whisper=stt.is_available,
         tts=tts.is_available,
         ollama_model=settings.ollama_model if ollama_ok else None,
