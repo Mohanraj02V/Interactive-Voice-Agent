@@ -39,6 +39,7 @@ class SpeechToTextService:
         compute_type = settings.whisper_compute_type
 
         try:
+            self._inject_nvidia_dlls()
             from faster_whisper import WhisperModel  # type: ignore
 
             logger.info(f"Loading Whisper model '{model_size}' on device='{device}'...")
@@ -48,11 +49,25 @@ class SpeechToTextService:
             actual_device = self._resolve_device(device)
             actual_compute_type = self._resolve_compute_type(compute_type, actual_device)
 
-            self._model = WhisperModel(
-                model_size,
-                device=actual_device,
-                compute_type=actual_compute_type,
-            )
+            try:
+                self._model = WhisperModel(
+                    model_size,
+                    device=actual_device,
+                    compute_type=actual_compute_type,
+                )
+            except Exception as e:
+                if actual_device == "cuda" and device == "auto":
+                    logger.error(f"[STT] WARNING: CUDA GPU detected but Whisper fell back to CPU — check cuDNN/CUDA install. ({e})")
+                    actual_device = "cpu"
+                    actual_compute_type = self._resolve_compute_type(compute_type, actual_device)
+                    self._model = WhisperModel(
+                        model_size,
+                        device=actual_device,
+                        compute_type=actual_compute_type,
+                    )
+                else:
+                    raise e
+
             self._model_size = model_size
             self._available = True
 
@@ -71,14 +86,35 @@ class SpeechToTextService:
             self._available = False
             return False
 
+    def _inject_nvidia_dlls(self):
+        """Inject Nvidia DLL paths on Windows so CTranslate2 can find cuBLAS/cuDNN."""
+        import os
+        if os.name != "nt":
+            return
+            
+        try:
+            import site
+            site_packages = site.getsitepackages()
+            for sp in site_packages:
+                for lib in ["cublas", "cudnn", "cuda_nvrtc", "cuda_runtime"]:
+                    bin_dir = os.path.join(sp, "nvidia", lib, "bin")
+                    if os.path.exists(bin_dir):
+                        os.add_dll_directory(bin_dir)
+                        if bin_dir not in os.environ.get("PATH", ""):
+                            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+        except Exception as e:
+            logger.warning(f"Failed to inject Nvidia DLL paths: {e}")
+
     def _resolve_device(self, device: str) -> str:
         """Resolve 'auto' device to 'cuda' or 'cpu'."""
         if device == "auto":
             try:
-                import torch  # type: ignore
-                return "cuda" if torch.cuda.is_available() else "cpu"
-            except ImportError:
-                return "cpu"
+                import ctranslate2
+                if ctranslate2.get_cuda_device_count() > 0:
+                    return "cuda"
+            except Exception as e:
+                logger.warning(f"[STT] CUDA detection via ctranslate2 failed: {e}")
+            return "cpu"
         return device
 
     def _resolve_compute_type(self, compute_type: str, device: str) -> str:
