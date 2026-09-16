@@ -119,17 +119,22 @@ export default function App() {
     audioRef.current = nextAudio;
 
     nextAudio.onended = () => {
+      if (nextAudio.src.startsWith('blob:')) URL.revokeObjectURL(nextAudio.src);
       audioRef.current = null;
       playNextAudio();
     };
 
     nextAudio.onerror = () => {
+      if (nextAudio.src.startsWith('blob:')) URL.revokeObjectURL(nextAudio.src);
       setError('Audio playback failed mid-stream.');
       audioRef.current = null;
       playNextAudio();
     };
 
     try {
+      if (nextAudio._parsed_time) {
+        console.log(`[LATENCY] Audio chunk parsing to play delta: ${Date.now() - nextAudio._parsed_time}ms`);
+      }
       await nextAudio.play();
     } catch (err) {
       setError('Audio playback was blocked by the browser.');
@@ -159,9 +164,20 @@ export default function App() {
         } else if (data.type === 'transcript') {
            setMessages((prev) => [...prev, createMessage('user', data.text)]);
         } else if (data.type === 'audio_chunk') {
+           const t_parsed = Date.now();
            // Preload audio
-           const fullUrl = getAudioUrl(data.audio_url);
-           const audio = new Audio(fullUrl);
+           let audio;
+           if (data.audio_data) {
+             const byteChars = atob(data.audio_data);
+             const byteNumbers = new Array(byteChars.length);
+             for (let i = 0; i < byteChars.length; i++) byteNumbers[i] = byteChars.charCodeAt(i);
+             const blob = new Blob([new Uint8Array(byteNumbers)], { type: 'audio/wav' });
+             audio = new Audio(URL.createObjectURL(blob));
+           } else {
+             const fullUrl = getAudioUrl(data.audio_url);
+             audio = new Audio(fullUrl);
+           }
+           audio._parsed_time = t_parsed;
            audio.load();
            audioQueueRef.current.push(audio);
 
@@ -259,6 +275,7 @@ export default function App() {
   // ── Stop active session entirely ───────────────────────────
   const handleStopSession = useCallback(() => {
     if (audioRef.current) {
+      if (audioRef.current.src.startsWith('blob:')) URL.revokeObjectURL(audioRef.current.src);
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       audioRef.current = null;
@@ -271,6 +288,7 @@ export default function App() {
   // ── Stop speaking (just the audio) ─────────────────────────
   const handleStopSpeaking = useCallback(() => {
     if (audioRef.current) {
+      if (audioRef.current.src.startsWith('blob:')) URL.revokeObjectURL(audioRef.current.src);
       audioRef.current.pause();
       audioRef.current.currentTime = 0;
       audioRef.current = null;

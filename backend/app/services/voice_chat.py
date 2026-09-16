@@ -2,6 +2,7 @@
 Voice chat orchestration service.
 Coordinates the full pipeline: Audio → STT → LLM → TTS → Response.
 """
+import base64
 import json
 import time
 from pathlib import Path
@@ -276,16 +277,28 @@ class VoiceChatService:
                             audio_path = tts.synthesize(sentence)
                             audio_url = f"/api/audio/{audio_path.name}"
                             
+                            t_before_b64 = time.time()
+                            audio_bytes = audio_path.read_bytes()
+                            audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+                            t_after_b64 = time.time()
+                            
                             if t_first_audio_chunk_sent == 0.0:
                                 t_first_audio_chunk_sent = time.time()
+                                b64_overhead_ms = (t_after_b64 - t_before_b64) * 1000
                                 logger.info(
                                     f"[LATENCY] stt={t_stt_complete - t_utterance_received:.2f}s "
                                     f"first_sentence={t_first_llm_sentence_ready - t_stt_complete:.2f}s "
                                     f"first_tts={t_first_audio_chunk_sent - t_first_llm_sentence_ready:.2f}s "
+                                    f"b64_overhead={b64_overhead_ms:.2f}ms "
                                     f"total_to_first_audio={t_first_audio_chunk_sent - t_utterance_received:.2f}s"
                                 )
                                 
-                            yield json.dumps({"type": "audio_chunk", "text": sentence, "audio_url": audio_url}) + "\n"
+                            yield json.dumps({
+                                "type": "audio_chunk", 
+                                "text": sentence, 
+                                "audio_url": audio_url,
+                                "audio_data": audio_b64
+                            }) + "\n"
                         except TTSError as e:
                             logger.error(f"TTS error chunk: {e}")
                             yield json.dumps({"type": "error", "code": "TTS_ERROR", "message": "Voice synthesis error mid-stream."}) + "\n"
@@ -296,7 +309,14 @@ class VoiceChatService:
                 try:
                     audio_path = tts.synthesize(sentence)
                     audio_url = f"/api/audio/{audio_path.name}"
-                    yield json.dumps({"type": "audio_chunk", "text": sentence, "audio_url": audio_url}) + "\n"
+                    audio_bytes = audio_path.read_bytes()
+                    audio_b64 = base64.b64encode(audio_bytes).decode("ascii")
+                    yield json.dumps({
+                        "type": "audio_chunk", 
+                        "text": sentence, 
+                        "audio_url": audio_url,
+                        "audio_data": audio_b64
+                    }) + "\n"
                 except TTSError as e:
                     logger.error(f"TTS error chunk: {e}")
                     yield json.dumps({"type": "error", "code": "TTS_ERROR", "message": "Voice synthesis error mid-stream."}) + "\n"
