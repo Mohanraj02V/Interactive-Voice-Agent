@@ -216,6 +216,11 @@ class VoiceChatService:
     ):
         settings = get_settings()
         saved_audio_path: Optional[Path] = None
+        
+        t_utterance_received = time.time()
+        t_stt_complete = 0.0
+        t_first_llm_sentence_ready = 0.0
+        t_first_audio_chunk_sent = 0.0
 
         self._run_cleanup()
         conversation = self._parse_conversation(conversation_json)
@@ -232,6 +237,7 @@ class VoiceChatService:
             stt = get_stt_service()
             try:
                 transcript = stt.transcribe(saved_audio_path)
+                t_stt_complete = time.time()
             except SpeechToTextError as e:
                 yield json.dumps({"type": "error", "code": "TRANSCRIPTION_FAILED", "message": str(e)}) + "\n"
                 return
@@ -263,9 +269,22 @@ class VoiceChatService:
                         sentence = buffer.strip()
                         buffer = ""
                         
+                        if t_first_llm_sentence_ready == 0.0:
+                            t_first_llm_sentence_ready = time.time()
+                        
                         try:
                             audio_path = tts.synthesize(sentence)
                             audio_url = f"/api/audio/{audio_path.name}"
+                            
+                            if t_first_audio_chunk_sent == 0.0:
+                                t_first_audio_chunk_sent = time.time()
+                                logger.info(
+                                    f"[LATENCY] stt={t_stt_complete - t_utterance_received:.2f}s "
+                                    f"first_sentence={t_first_llm_sentence_ready - t_stt_complete:.2f}s "
+                                    f"first_tts={t_first_audio_chunk_sent - t_first_llm_sentence_ready:.2f}s "
+                                    f"total_to_first_audio={t_first_audio_chunk_sent - t_utterance_received:.2f}s"
+                                )
+                                
                             yield json.dumps({"type": "audio_chunk", "text": sentence, "audio_url": audio_url}) + "\n"
                         except TTSError as e:
                             logger.error(f"TTS error chunk: {e}")

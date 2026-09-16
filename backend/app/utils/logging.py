@@ -33,6 +33,11 @@ def setup_logging() -> logging.Logger:
     root_logger.setLevel(log_level)
     root_logger.handlers.clear()
     root_logger.addHandler(console_handler)
+    
+    file_handler = logging.FileHandler("backend.log", encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(log_level)
+    root_logger.addHandler(file_handler)
 
     # Suppress noisy debug logs from third-party libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)

@@ -60,8 +60,8 @@ async def lifespan(app: FastAPI):
         logger.warning("[WARN] Piper TTS unavailable - voice playback will not work")
 
     logger.info("=" * 60)
-    logger.info(f"  Whisper:  {'[OK] available' if stt_ok else '[WARN] unavailable'}")
-    logger.info(f"  Ollama:   {'[OK] available' if llm_ok else '[WARN] unavailable'}")
+    logger.info(f"  Whisper:  {'[OK] available' if stt_ok else '[WARN] unavailable'} (model: {settings.whisper_model})")
+    logger.info(f"  Ollama:   {'[OK] available' if llm_ok else '[WARN] unavailable'} (model: {settings.ollama_model}, max_predict: {settings.ollama_num_predict})")
     logger.info(f"  Piper:    {'[OK] available' if tts_ok else '[WARN] unavailable'}")
     logger.info(f"  CORS:     Allowed origins: {settings.cors_origins_list}")
     logger.info(f"  API ready at http://{settings.host}:{settings.port}")

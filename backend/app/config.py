@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     system_prompt: str = Field(
         default=(
             "You are a helpful voice AI assistant.\n"
+            "Always start your reply with a short sentence (under 12 words), then continue if needed.\n"
             "Respond naturally and concisely because your response will be spoken aloud.\n"
             "Prefer 1 to 3 short sentences unless the user asks for detail.\n"
             "Avoid markdown, headings, and long lists."

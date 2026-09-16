@@ -131,6 +131,7 @@ class SpeechToTextService:
                 language="en",
                 vad_filter=True,  # Filter out silent sections
                 vad_parameters={"min_silence_duration_ms": 500},
+                condition_on_previous_text=False,
             )
 
             # Collect all segments
