@@ -57,8 +57,9 @@ class SpeechToTextService:
             self._available = True
 
             elapsed = time.time() - start
-            logger.info(f"[OK] Whisper model '{model_size}' loaded in {elapsed:.2f}s "
-                        f"(device={actual_device}, compute={actual_compute_type})")
+            gpu_status = "Available" if actual_device == "cuda" else "Not Available"
+            logger.info(f"[STT] Initialization: Whisper model '{model_size}' loaded in {elapsed:.2f}s "
+                        f"(device={actual_device}, compute={actual_compute_type}, GPU: {gpu_status})")
             return True
 
         except ImportError:
@@ -120,7 +121,7 @@ class SpeechToTextService:
         if file_size == 0:
             raise SpeechToTextError("Audio file is empty")
 
-        logger.info(f"Transcription started: {audio_path.name} ({file_size} bytes)")
+        logger.info(f"[STT] Started: {audio_path.name} ({file_size} bytes)")
         start = time.time()
 
         try:
@@ -142,8 +143,9 @@ class SpeechToTextService:
             transcript = " ".join(transcript_parts).strip()
             elapsed = time.time() - start
 
+            logger.info(f"[STT] Completed: {elapsed:.2f}s")
             logger.info(
-                f"Transcription completed in {elapsed:.2f}s "
+                f"[STT] Duration: {elapsed:.2f}s "
                 f"(detected language: {info.language}, "
                 f"probability: {info.language_probability:.2f})"
             )

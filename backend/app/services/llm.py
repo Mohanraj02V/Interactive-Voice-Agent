@@ -118,7 +118,7 @@ class LLMService:
         }
 
         logger.info(
-            f"LLM request started: model={settings.ollama_model}, "
+            f"[LLM] Started: model={settings.ollama_model}, "
             f"messages={len(ollama_messages)}"
         )
         start = time.time()
@@ -146,6 +146,9 @@ class LLMService:
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
+                error_body = e.response.text
+                logger.error(f"[LLM] 404 Error from Ollama at {url}: {error_body}")
+                
                 # Differentiate between model missing and endpoint missing
                 if not self._model_available:
                     raise LLMError(
@@ -153,8 +156,10 @@ class LLMService:
                         f"Run: ollama pull {settings.ollama_model}"
                     )
                 else:
-                    raise LLMError(f"AI chat endpoint not found. Check OLLAMA_CHAT_ENDPOINT.")
-            raise LLMError(f"Could not generate an AI response. (Status: {e.response.status_code})")
+                    raise LLMError(f"AI chat endpoint not found. Please check your configuration.")
+            
+            logger.error(f"[LLM] HTTP Error {e.response.status_code} from Ollama: {e.response.text}")
+            raise LLMError("Could not generate an AI response due to a server error.")
         except Exception as e:
             raise LLMError(f"AI service error: {str(e)}")
 
@@ -168,7 +173,12 @@ class LLMService:
         if not response_text:
             raise LLMError("AI returned an empty response")
 
-        logger.info(f"LLM request completed in {elapsed:.2f}s")
+        logger.info(f"[LLM] Completed: {elapsed:.2f}s")
+        logger.info(
+            f"[LLM] Duration: {elapsed:.2f}s | "
+            f"Length: {len(response_text)} chars | "
+            f"Tokens: {data.get('eval_count', 'unknown')} eval / {data.get('prompt_eval_count', 'unknown')} prompt"
+        )
         logger.debug(f"Response: {response_text[:100]}{'...' if len(response_text) > 100 else ''}")
 
         return response_text

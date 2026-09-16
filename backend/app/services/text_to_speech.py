@@ -2,9 +2,9 @@
 Text-to-Speech service using Piper TTS.
 Converts response text into WAV audio files.
 """
-import shutil
-import subprocess
 import time
+import wave
+from pathlib import Path
 from pathlib import Path
 from typing import Optional
 
@@ -32,7 +32,7 @@ class TextToSpeechService:
 
     def __init__(self):
         self._available = False
-        self._piper_path: Optional[str] = None
+        self._voice = None
         self._model_path: Optional[Path] = None
 
     def initialize(self) -> bool:
@@ -40,39 +40,35 @@ class TextToSpeechService:
         Check that Piper is available and the voice model exists.
         Returns True if everything is set up.
         """
+        # Find voice model relative to backend project
+        # Project root is backend/
         settings = get_settings()
+        model_path = Path(settings.piper_model).absolute()
 
-        # Find piper executable
-        piper_exe = shutil.which(settings.piper_executable)
-        if piper_exe is None:
-            # Try as a direct path
-            candidate = Path(settings.piper_executable)
-            if candidate.exists():
-                piper_exe = str(candidate)
-
-        if piper_exe is None:
-            logger.warning(
-                f"⚠ Piper executable '{settings.piper_executable}' not found. "
-                "TTS will be unavailable. Install Piper and add it to PATH."
-            )
-            self._available = False
-            return False
-
-        # Check voice model
-        model_path = Path(settings.piper_model)
         if not model_path.exists():
             logger.warning(
-                f"⚠ Piper voice model not found: {settings.piper_model}. "
-                "Download a voice model and update PIPER_MODEL in .env"
+                f"⚠ Piper voice model not found: {model_path}. "
+                "TTS will be unavailable."
             )
             self._available = False
             return False
 
-        self._piper_path = piper_exe
-        self._model_path = model_path
-        self._available = True
-        logger.info(f"[OK] Piper TTS available (model: {model_path.name})")
-        return True
+        try:
+            logger.info(f"[TTS] Initialization started for model: {model_path.name}")
+            from piper import PiperVoice
+            self._voice = PiperVoice.load(str(model_path))
+            self._model_path = model_path
+            self._available = True
+            logger.info(f"[OK] Piper TTS available (model: {model_path.name})")
+            return True
+        except ImportError:
+            logger.warning("[WARN] piper-tts python package is not installed. Run: pip install piper-tts")
+            self._available = False
+            return False
+        except Exception as e:
+            logger.warning(f"[WARN] Failed to load Piper model '{model_path.name}': {e}")
+            self._available = False
+            return False
 
     @property
     def is_available(self) -> bool:
@@ -108,33 +104,12 @@ class TextToSpeechService:
         output_filename = generate_unique_filename(prefix="response_", extension="wav")
         output_path = output_dir / output_filename
 
-        logger.info(f"TTS started: generating {output_filename}")
+        logger.info(f"[TTS] Synthesis started: generating {output_filename}")
         start = time.time()
 
         try:
-            # Piper reads text from stdin and outputs to stdout or a file
-            result = subprocess.run(
-                [
-                    self._piper_path,
-                    "--model", str(self._model_path),
-                    "--output_file", str(output_path),
-                ],
-                input=clean_text.encode("utf-8"),
-                capture_output=True,
-                timeout=60,
-            )
-
-            if result.returncode != 0:
-                stderr = result.stderr.decode("utf-8", errors="replace")
-                raise TTSError(f"Piper returned error: {stderr[:200]}")
-
-        except subprocess.TimeoutExpired:
-            output_path.unlink(missing_ok=True)
-            raise TTSError("Text-to-speech synthesis timed out")
-        except FileNotFoundError:
-            raise TTSUnavailableError(
-                f"Piper executable not found at '{self._piper_path}'"
-            )
+            with wave.open(str(output_path), "wb") as f:
+                self._voice.synthesize(clean_text, f)
         except Exception as e:
             output_path.unlink(missing_ok=True)
             raise TTSError(f"TTS synthesis failed: {str(e)}")
@@ -143,9 +118,10 @@ class TextToSpeechService:
             raise TTSError("Piper did not produce an output file")
 
         elapsed = time.time() - start
+        logger.info(f"[TTS] Synthesis completed")
         logger.info(
-            f"TTS completed in {elapsed:.2f}s: "
-            f"{output_path.name} ({output_path.stat().st_size} bytes)"
+            f"[TTS] Duration: {elapsed:.2f}s "
+            f"({output_path.name}, {output_path.stat().st_size} bytes)"
         )
 
         return output_path

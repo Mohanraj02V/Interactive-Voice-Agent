@@ -24,8 +24,8 @@ function getSupportedMimeType() {
 }
 
 // Configurable VAD settings (using constants, could be moved to env later)
-const VAD_SILENCE_MS = 900;
-const VAD_MIN_SPEECH_MS = 500;
+const VAD_SILENCE_MS = 700;
+const VAD_MIN_SPEECH_MS = 400;
 const VAD_THRESHOLD = 0.02;
 const VAD_MAX_UTTERANCE_MS = 30000;
 
@@ -138,12 +138,12 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
         // Speech just started
         isSpeechActiveRef.current = true;
         speechStartedAtRef.current = now;
-        console.log('[VOICE] Speech detected');
+        console.log(`[VAD] Speech started: ${now}`);
         
         // Enforce max duration safety
         if (utteranceTimeoutRef.current) clearTimeout(utteranceTimeoutRef.current);
         utteranceTimeoutRef.current = setTimeout(() => {
-          console.log('[VOICE] Max utterance duration reached');
+          console.log('[VAD] Max utterance duration reached');
           if (vadActiveRef.current) finalizeUtterance();
         }, VAD_MAX_UTTERANCE_MS);
       }
@@ -154,7 +154,9 @@ export function useVoiceRecorder({ onUtteranceComplete }) {
 
       if (silenceDuration >= VAD_SILENCE_MS) {
         if (speechDuration >= VAD_MIN_SPEECH_MS) {
-          console.log(`[VOICE] Silence detected - finalizing utterance (${(speechDuration/1000).toFixed(1)}s)`);
+          console.log(`[VAD] Last speech: ${lastSpeechAtRef.current}`);
+          console.log(`[VAD] Silence duration: ${silenceDuration}ms`);
+          console.log(`[VAD] Utterance finalized: ${now}`);
           finalizeUtterance();
         } else {
           // Noise spike, just reset speech state without finalizing

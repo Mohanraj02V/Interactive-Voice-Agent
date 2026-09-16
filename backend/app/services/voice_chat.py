@@ -55,8 +55,13 @@ class VoiceChatService:
         conversation = self._parse_conversation(conversation_json)
 
         logger.info(
-            f"Request received: conversation_length={len(conversation)}"
+            f"[REQUEST] Started: conversation_length={len(conversation)}"
         )
+        
+        # Timing trackers
+        t_stt = 0.0
+        t_llm = 0.0
+        t_tts = 0.0
 
         try:
             # 1. Save uploaded audio
@@ -75,9 +80,9 @@ class VoiceChatService:
             # 2. Speech to Text
             stt = get_stt_service()
             try:
-                logger.info("Transcription started")
+                stt_start = time.time()
                 transcript = stt.transcribe(saved_audio_path)
-                logger.info("Transcription completed")
+                t_stt = time.time() - stt_start
             except SpeechToTextError as e:
                 return VoiceChatResponse(
                     success=False,
@@ -108,9 +113,9 @@ class VoiceChatService:
             # 5. LLM
             llm = get_llm_service()
             try:
-                logger.info("LLM request started")
+                llm_start = time.time()
                 llm_response = llm.chat(messages)
-                logger.info("LLM request completed")
+                t_llm = time.time() - llm_start
             except LLMUnavailableError as e:
                 return VoiceChatResponse(
                     success=False,
@@ -136,10 +141,10 @@ class VoiceChatService:
             tts_warning: Optional[str] = None
 
             try:
-                logger.info("TTS started")
+                tts_start = time.time()
                 audio_path = tts.synthesize(llm_response)
+                t_tts = time.time() - tts_start
                 audio_url = f"/api/audio/{audio_path.name}"
-                logger.info("TTS completed")
             except TTSUnavailableError as e:
                 tts_warning = (
                     "AI response generated, but voice playback is currently unavailable. "
@@ -151,7 +156,17 @@ class VoiceChatService:
                 logger.error(f"TTS error: {e}")
 
             elapsed = time.time() - pipeline_start
-            logger.info(f"Request completed in {elapsed:.2f}s")
+            overhead = elapsed - (t_stt + t_llm + t_tts)
+            
+            logger.info(
+                f"\n--- [VOICE CHAT] Timing Waterfall ---\n"
+                f"[STT]        {t_stt:.2f}s\n"
+                f"[LLM]        {t_llm:.2f}s\n"
+                f"[TTS]        {t_tts:.2f}s\n"
+                f"[OVERHEAD]   {overhead:.2f}s\n"
+                f"[REQUEST] Total: {elapsed:.2f}s\n"
+                f"---------------------------------------"
+            )
 
             return VoiceChatResponse(
                 success=True,

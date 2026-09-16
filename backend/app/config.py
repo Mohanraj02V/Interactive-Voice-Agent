@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     ollama_base_url: str = Field(default="http://localhost:11434", alias="OLLAMA_BASE_URL")
     ollama_chat_endpoint: str = Field(default="/api/chat", alias="OLLAMA_CHAT_ENDPOINT")
     ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
-    ollama_num_predict: int = Field(default=300, alias="OLLAMA_NUM_PREDICT")
+    ollama_num_predict: int = Field(default=120, alias="OLLAMA_NUM_PREDICT")
     ollama_timeout: int = Field(default=120, alias="OLLAMA_TIMEOUT")
 
     # Piper TTS
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     # Audio settings
     max_audio_size_mb: int = Field(default=25, alias="MAX_AUDIO_SIZE_MB")
-    max_conversation_messages: int = Field(default=20, alias="MAX_CONVERSATION_MESSAGES")
+    max_conversation_messages: int = Field(default=8, alias="MAX_CONVERSATION_MESSAGES")
     generated_audio_dir: str = Field(default="generated_audio", alias="GENERATED_AUDIO_DIR")
     temp_audio_dir: str = Field(default="temp_audio", alias="TEMP_AUDIO_DIR")
     audio_retention_minutes: int = Field(default=60, alias="AUDIO_RETENTION_MINUTES")
@@ -50,12 +50,10 @@ class Settings(BaseSettings):
     # System prompt for the LLM
     system_prompt: str = Field(
         default=(
-            "You are a helpful voice AI assistant. "
-            "Answer clearly and naturally. "
-            "Keep responses concise enough to be comfortable when spoken aloud. "
-            "Do not use unnecessary markdown, bullet points, or headers in your responses. "
-            "Do not produce extremely long responses unless the user explicitly requests more detail. "
-            "Speak in plain, conversational sentences."
+            "You are a helpful voice AI assistant.\n"
+            "Respond naturally and concisely because your response will be spoken aloud.\n"
+            "Prefer 1 to 3 short sentences unless the user asks for detail.\n"
+            "Avoid markdown, headings, and long lists."
         ),
         alias="SYSTEM_PROMPT",
     )
